@@ -1,7 +1,7 @@
 from kipy import KiCad
 from kipy.geometry import Angle
 from kicad_utils import mirror_point
-from fp_mapping import FP_MAPPING
+from fp_mapping import FP_MAPPING, MIRROR_AXIS_X_MM
 
 def move_footprints_from_FP_MAPPING(MIRROR_AXIS_X_MM, board, FP_MAPPING):
     fp_dict = {fp.reference_field.text.value: fp for fp in board.get_footprints()}
@@ -27,7 +27,6 @@ def move_footprints_from_FP_MAPPING(MIRROR_AXIS_X_MM, board, FP_MAPPING):
             print(f"Warning: RefDes pair not found: {r_ref} - {l_ref}")
 
 def main():
-    MIRROR_AXIS_X_MM = 200.0  # ミラーリングの基準となるX座標（mm単位）
     board = KiCad().get_board()
 
     move_footprints_from_FP_MAPPING(MIRROR_AXIS_X_MM, board, FP_MAPPING)

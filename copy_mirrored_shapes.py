@@ -3,6 +3,7 @@ from kipy.geometry import PolygonWithHoles, PolyLineNode, PolyLine
 from kipy.board_types import BoardPolygon, BoardCircle, BoardText
 from kipy.board import Board
 from kicad_utils import mirror_point
+from fp_mapping import MIRROR_AXIS_X_MM
 
 def mirror_shape(MIRROR_AXIS_X_MM, board: Board):
     for shape in board.get_shapes():
@@ -58,7 +59,6 @@ def mirror_text(MIRROR_AXIS_X_MM, board: Board):
         board.create_items(new_text)
 
 def main():
-    MIRROR_AXIS_X_MM = 200.0  # ミラーリングの基準となるX座標（mm単位）
     board = KiCad().get_board()
 
     # mirror_shape(MIRROR_AXIS_X_MM, board)
