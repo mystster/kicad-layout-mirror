@@ -158,4 +158,4 @@ def merge_shapes_with_ipc(source_layer_name, target_layer_name):
         print("Failed to generate a valid polygon from shapes.")
 
 if __name__ == "__main__":
-    merge_shapes_with_ipc("User.1", "F.Mask")
+    merge_shapes_with_ipc("User.1", "Edge.Cuts")
