@@ -1,8 +1,8 @@
 import math
 from kipy import KiCad
-from kipy.board_types import BoardPolygon
+import kipy.board_types as bt
 from kipy.geometry import PolygonWithHoles, PolyLine, PolyLineNode, arc_center, arc_radius, arc_start_angle, arc_end_angle
-from shapely.geometry import Polygon, LineString
+from shapely.geometry import Polygon, LineString, Point, box
 from shapely.ops import polygonize, unary_union
 
 def arc_to_points(arc, num_segments=16):
@@ -42,7 +42,7 @@ def points_to_polyline(pts):
         pl.append(PolyLineNode.from_xy(int(x), int(y)))
     return pl
 
-def kipy_to_shapely(geom):
+def kipy_polygon_to_shapely(geom):
     if isinstance(geom, PolygonWithHoles):
         outline_pts = polyline_to_points(geom.outline)
         if len(outline_pts) < 3:
@@ -52,17 +52,38 @@ def kipy_to_shapely(geom):
             hole_pts = polyline_to_points(hole)
             if len(hole_pts) >= 3:
                 holes.append(hole_pts)
-        # Ensure outline_pts is closed
         if outline_pts[0] != outline_pts[-1]:
             outline_pts.append(outline_pts[0])
         return Polygon(outline_pts, holes)
-    elif isinstance(geom, PolyLine):
-        pts = polyline_to_points(geom)
-        if len(pts) >= 2:
-            return LineString(pts)
     return None
 
-def shapely_to_kipy(shapely_poly):
+def item_to_shapely(item):
+    if isinstance(item, bt.BoardSegment) or isinstance(item, bt.Track):
+        return LineString([(item.start.x, item.start.y), (item.end.x, item.end.y)])
+    elif isinstance(item, bt.BoardArc) or isinstance(item, bt.ArcTrack):
+        arc_pts = arc_to_points(item)
+        if len(arc_pts) >= 2:
+            return LineString(arc_pts)
+    elif isinstance(item, bt.BoardPolygon):
+        shapely_polys = []
+        for p in item.polygons:
+            poly = kipy_polygon_to_shapely(p)
+            if poly: shapely_polys.append(poly)
+        if len(shapely_polys) == 1:
+            return shapely_polys[0]
+        elif len(shapely_polys) > 1:
+            return unary_union(shapely_polys)
+    elif isinstance(item, bt.BoardRectangle):
+        return box(item.top_left.x, item.top_left.y, item.bottom_right.x, item.bottom_right.y)
+    elif isinstance(item, bt.BoardCircle):
+        cx, cy = item.center.x, item.center.y
+        rx, ry = item.radius_point.x, item.radius_point.y
+        r = math.hypot(rx - cx, ry - cy)
+        # Use shapely buffer to create circle polygon
+        return Point(cx, cy).buffer(r, resolution=16)
+    return None
+
+def shapely_to_kipy_polygon_with_holes(shapely_poly):
     if not isinstance(shapely_poly, Polygon):
         return None
     kipy_poly = PolygonWithHoles()
@@ -72,37 +93,35 @@ def shapely_to_kipy(shapely_poly):
     return kipy_poly
 
 def merge_shapes_with_ipc(source_layer_name, target_layer_name):
-    # 1. KiCad本体に接続
     board = KiCad().get_board()
 
-    # 対象レイヤーの取得
-    source_layer = board.get_layer(source_layer_name)
-    target_layer = board.get_layer(target_layer_name)
+    def get_layer_enum(name):
+        enum_name = "BL_" + name.replace(".", "_")
+        if hasattr(bt.BoardLayer, enum_name):
+            return getattr(bt.BoardLayer, enum_name)
+        raise ValueError(f"Unknown layer: {name}")
+
+    source_layer = get_layer_enum(source_layer_name)
+    target_layer = get_layer_enum(target_layer_name)
 
     polygons = []
     lines = []
 
-    # 2. 全ての描画アイテムを走査してshapelyオブジェクトに変換
-    for item in board.drawings:
+    # Get shapes and tracks instead of the hallucinated "drawings" property
+    drawings = board.get_shapes() + board.get_tracks()
+    for item in drawings:
         if item.layer == source_layer:
-            try:
-                item_geom = item.geometry
-                shapely_geom = kipy_to_shapely(item_geom)
-                if isinstance(shapely_geom, Polygon):
-                    polygons.append(shapely_geom)
-                elif isinstance(shapely_geom, LineString):
-                    lines.append(shapely_geom)
-            except AttributeError:
-                continue
+            shapely_geom = item_to_shapely(item)
+            if isinstance(shapely_geom, Polygon):
+                polygons.append(shapely_geom)
+            elif isinstance(shapely_geom, LineString):
+                lines.append(shapely_geom)
 
-    # 3. 幾何学的な「和（Union）」および「面化（Polygonize）」を計算
     merged_polygons = []
     
-    # 既存のポリゴン同士を結合
     if polygons:
         merged_polygons.append(unary_union(polygons))
         
-    # 線からポリゴンを生成して結合
     if lines:
         polygonized = list(polygonize(lines))
         if polygonized:
@@ -112,37 +131,31 @@ def merge_shapes_with_ipc(source_layer_name, target_layer_name):
         print("No shapes found to merge.")
         return
 
-    # 全てを結合
     final_shape = unary_union(merged_polygons)
 
-    # Multipolygonの場合はそれぞれをBoardPolygonとして追加
     shapes_to_add = []
     if final_shape.geom_type == 'Polygon':
         shapes_to_add.append(final_shape)
     elif final_shape.geom_type == 'MultiPolygon':
         shapes_to_add.extend(list(final_shape.geoms))
 
-    # 4. 合成結果を新しいポリゴンとして作成して追加
     added_count = 0
     for shape in shapes_to_add:
-        kipy_poly = shapely_to_kipy(shape)
+        kipy_poly = shapely_to_kipy_polygon_with_holes(shape)
         if kipy_poly:
-            new_polygon = BoardPolygon(
-                board=board,
-                layer=target_layer,
-                geometry=kipy_poly,
-                filled=True
-            )
-            board.add(new_polygon)
+            new_polygon = bt.BoardPolygon()
+            new_polygon.polygons.append(kipy_poly)
+            new_polygon.layer = target_layer
+            new_polygon.attributes.fill.filled = True
+            
+            # Using create_items instead of hallucinated board.add()
+            board.create_items(new_polygon)
             added_count += 1
 
     if added_count > 0:
-        # 5. 変更をKiCad本体に反映
-        board.commit()
         print(f"Successfully merged shapes from {source_layer_name} to {target_layer_name}.")
     else:
         print("Failed to generate a valid polygon from shapes.")
 
 if __name__ == "__main__":
-    # レイヤー名はKiCad上の表示名（例: "User.1", "F.Cu"）
     merge_shapes_with_ipc("User.1", "F.Mask")

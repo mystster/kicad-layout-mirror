@@ -61,7 +61,7 @@ def mirror_text(MIRROR_AXIS_X_MM, board: Board):
 def main():
     board = KiCad().get_board()
 
-    # mirror_shape(MIRROR_AXIS_X_MM, board)
+    mirror_shape(MIRROR_AXIS_X_MM, board)
     mirror_text(MIRROR_AXIS_X_MM, board)
 
 if __name__ == "__main__":
